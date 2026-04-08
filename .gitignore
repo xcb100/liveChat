@@ -1,0 +1,14 @@
+.idea/
+imaptool.exe
+node_modules/
+npm-debug.log*
+.gocache/
+.gomodcache/
+gochat
+install.lock
+logs/*.log
+LICENSE
+AGENT.md
+Context.md
+**/Context.md
+config/GeoLite2-City.mmdb

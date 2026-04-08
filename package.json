@@ -1,0 +1,16 @@
+{
+  "name": "livechat-frontend",
+  "private": true,
+  "scripts": {
+    "dev": "vite --config frontend/vite.config.js",
+    "build": "vite build --config frontend/vite.config.js"
+  },
+  "dependencies": {
+    "vue": "^3.5.32",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "vite": "^5.4.19"
+  }
+}

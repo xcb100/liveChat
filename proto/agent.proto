@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package goflylivechat.agent.v1;
+
+option go_package = "goflylivechat/agentpb;agentpb";
+
+message AgentRegistration {
+  string agent_id = 1;
+  string display_name = 2;
+  repeated string capabilities = 3;
+  uint32 max_sessions = 4;
+  bool enabled = 5;
+}
+
+message AgentDescriptor {
+  string agent_id = 1;
+  string display_name = 2;
+  repeated string capabilities = 3;
+  uint32 max_sessions = 4;
+  uint32 active_sessions = 5;
+  uint32 available_sessions = 6;
+  bool available = 7;
+  bool enabled = 8;
+  int64 updated_at_unix = 9;
+}
+
+message RegisterAgentRequest {
+  AgentRegistration agent = 1;
+}
+
+message RegisterAgentResponse {
+  AgentDescriptor agent = 1;
+}
+
+message HeartbeatRequest {
+  string agent_id = 1;
+}
+
+message HeartbeatResponse {
+  AgentDescriptor agent = 1;
+}
+
+message ListAgentsRequest {
+  bool only_available = 1;
+  string capability = 2;
+}
+
+message ListAgentsResponse {
+  repeated AgentDescriptor agents = 1;
+}
+
+message AssignSessionRequest {
+  string visitor_id = 1;
+  string visitor_name = 2;
+  string preferred_capability = 3;
+  string source = 4;
+}
+
+message AssignSessionResponse {
+  bool assigned = 1;
+  string agent_id = 2;
+  string display_name = 3;
+  string reason = 4;
+}
+
+message ReleaseSessionRequest {
+  string visitor_id = 1;
+}
+
+message ReleaseSessionResponse {
+  bool released = 1;
+}
+
+service AgentService {
+  rpc RegisterAgent(RegisterAgentRequest) returns (RegisterAgentResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  rpc AssignSession(AssignSessionRequest) returns (AssignSessionResponse);
+  rpc ReleaseSession(ReleaseSessionRequest) returns (ReleaseSessionResponse);
+}
