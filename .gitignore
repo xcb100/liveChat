@@ -5,10 +5,16 @@ npm-debug.log*
 .gocache/
 .gomodcache/
 gochat
+*.exe
 install.lock
 logs/*.log
 LICENSE
-AGENT.md
+AGENTS.md
 Context.md
 **/Context.md
 config/GeoLite2-City.mmdb
+config/mysql.json
+config/redis.json
+__debug_register.go
+profile*.png
+数据结构.md

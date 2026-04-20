@@ -21,6 +21,11 @@ type AppConfig struct {
 	ShutdownTimeout          time.Duration
 	RateLimitPerSecond       float64
 	RateLimitBurst           int
+	KefuDefaultMaxSessions   int
+	KefuDefaultQueueName     string
+	KefuPendingRetryInterval time.Duration
+	KefuPendingExpandAfter   time.Duration
+	KefuPendingTTL           time.Duration
 	AgentHeartbeatTTL        time.Duration
 	AgentDialTimeout         time.Duration
 	AgentRequestTimeout      time.Duration
@@ -57,6 +62,11 @@ func GetAppConfig() AppConfig {
 		ShutdownTimeout:          getEnvDuration("LIVECHAT_SHUTDOWN_TIMEOUT", 15*time.Second),
 		RateLimitPerSecond:       getEnvFloat("LIVECHAT_RATE_LIMIT_RPS", 8),
 		RateLimitBurst:           getEnvInt("LIVECHAT_RATE_LIMIT_BURST", 16),
+		KefuDefaultMaxSessions:   getEnvInt("LIVECHAT_KEFU_DEFAULT_MAX_SESSIONS", 5),
+		KefuDefaultQueueName:     getEnvString("LIVECHAT_KEFU_DEFAULT_QUEUE", "default"),
+		KefuPendingRetryInterval: getEnvDuration("LIVECHAT_KEFU_PENDING_RETRY_INTERVAL", 3*time.Second),
+		KefuPendingExpandAfter:   getEnvDuration("LIVECHAT_KEFU_PENDING_EXPAND_AFTER", 10*time.Second),
+		KefuPendingTTL:           getEnvDuration("LIVECHAT_KEFU_PENDING_TTL", 10*time.Minute),
 		AgentHeartbeatTTL:        getEnvDuration("LIVECHAT_AGENT_HEARTBEAT_TTL", 75*time.Second),
 		AgentDialTimeout:         getEnvDuration("LIVECHAT_AGENT_DIAL_TIMEOUT", 2*time.Second),
 		AgentRequestTimeout:      getEnvDuration("LIVECHAT_AGENT_REQUEST_TIMEOUT", 1200*time.Millisecond),

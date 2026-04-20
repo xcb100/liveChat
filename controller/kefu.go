@@ -3,9 +3,11 @@ package controller
 import (
 	"github.com/gin-gonic/gin"
 	"goflylivechat/models"
+	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"goflylivechat/ws"
 	"net/http"
+	"strconv"
 )
 
 func PostKefuAvator(c *gin.Context) {
@@ -128,7 +130,6 @@ func GetOtherKefuList(c *gin.Context) {
 func PostTransKefu(c *gin.Context) {
 	kefuId := c.Query("kefu_id")
 	visitorId := c.Query("visitor_id")
-	curKefuId, _ := c.Get("kefu_name")
 	user := models.FindUser(kefuId)
 	visitor := models.FindVisitorByVistorId(visitorId)
 	if user.Name == "" || visitor.Name == "" {
@@ -138,14 +139,96 @@ func PostTransKefu(c *gin.Context) {
 		})
 		return
 	}
+	previousOwnerID := visitor.ToId
+	assignResult := routing.GetDefaultCenter().TransferSession(visitorId, kefuId)
+	if !assignResult.Assigned {
+		assignResult = routing.GetDefaultCenter().AssignSession(routing.AssignmentRequest{
+			VisitorID:        visitorId,
+			VisitorName:      visitor.Name,
+			PreferredOwnerID: kefuId,
+		})
+	}
+	if !assignResult.Assigned {
+		c.JSON(200, gin.H{
+			"code": 400,
+			"msg":  assignResult.Reason,
+		})
+		return
+	}
 	models.UpdateVisitorKefu(visitorId, kefuId)
+	visitor.ToId = kefuId
 	ws.UpdateVisitorUser(visitorId, kefuId)
 	go ws.VisitorOnline(kefuId, visitor)
-	go ws.VisitorOffline(curKefuId.(string), visitor.VisitorId, visitor.Name)
+	if previousOwnerID != "" && previousOwnerID != kefuId {
+		go ws.NotifyKefuVisitorOffline(previousOwnerID, visitor.VisitorId, visitor.Name)
+	}
+	if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
+		go ws.BroadcastSessionUpdated(sessionSnapshot)
+	}
 	go ws.VisitorNotice(visitor.VisitorId, "客服转接到"+user.Nickname)
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "转移成功",
+	})
+}
+
+func PostTakeSession(c *gin.Context) {
+	visitorId := c.PostForm("visitor_id")
+	currentKefuID, _ := c.Get("kefu_name")
+	if visitorId == "" {
+		c.JSON(200, gin.H{
+			"code": 400,
+			"msg":  "visitor_id不能为空",
+		})
+		return
+	}
+
+	currentKefuName := currentKefuID.(string)
+	currentKefu := models.FindUser(currentKefuName)
+	visitor := models.FindVisitorByVistorId(visitorId)
+	if currentKefu.Name == "" || visitor.Name == "" {
+		c.JSON(200, gin.H{
+			"code": 400,
+			"msg":  "访客或客服不存在",
+		})
+		return
+	}
+
+	previousOwnerID := visitor.ToId
+	assignResult := routing.GetDefaultCenter().TransferSession(visitorId, currentKefuName)
+	if !assignResult.Assigned {
+		assignResult = routing.GetDefaultCenter().AssignSession(routing.AssignmentRequest{
+			VisitorID:        visitorId,
+			VisitorName:      visitor.Name,
+			PreferredOwnerID: currentKefuName,
+		})
+	}
+	if !assignResult.Assigned {
+		c.JSON(200, gin.H{
+			"code": 400,
+			"msg":  assignResult.Reason,
+		})
+		return
+	}
+
+	models.UpdateVisitorKefu(visitorId, currentKefuName)
+	visitor.ToId = currentKefuName
+	ws.UpdateVisitorUser(visitorId, currentKefuName)
+	go ws.VisitorOnline(currentKefuName, visitor)
+	if previousOwnerID != "" && previousOwnerID != currentKefuName {
+		go ws.NotifyKefuVisitorOffline(previousOwnerID, visitor.VisitorId, visitor.Name)
+	}
+	if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
+		go ws.BroadcastSessionUpdated(sessionSnapshot)
+	}
+	go ws.VisitorNotice(visitor.VisitorId, "客服 "+currentKefu.Nickname+" 已接管当前会话")
+
+	c.JSON(200, gin.H{
+		"code": 200,
+		"msg":  "接管成功",
+		"result": gin.H{
+			"owner_id": currentKefuName,
+		},
 	})
 }
 func GetKefuInfoSetting(c *gin.Context) {
@@ -230,6 +313,44 @@ func PostKefuInfo(c *gin.Context) {
 		"code":   200,
 		"msg":    "ok",
 		"result": "",
+	})
+}
+
+func PostKefuRoutingStatus(c *gin.Context) {
+	kefuNameValue, _ := c.Get("kefu_name")
+	kefuName := kefuNameValue.(string)
+	presenceStatus := c.DefaultPostForm("presence_status", routing.PresenceOnline)
+	acceptingRaw := c.DefaultPostForm("accepting_sessions", "true")
+	acceptingSessions, parseError := strconv.ParseBool(acceptingRaw)
+	if parseError != nil {
+		c.JSON(200, gin.H{
+			"code": 400,
+			"msg":  "accepting_sessions格式错误",
+		})
+		return
+	}
+	if presenceStatus != routing.PresenceOnline && presenceStatus != routing.PresenceAway && presenceStatus != routing.PresenceBusy {
+		c.JSON(200, gin.H{
+			"code": 400,
+			"msg":  "presence_status不支持",
+		})
+		return
+	}
+
+	models.UpdateConfig(kefuName, "KefuPresenceStatus", presenceStatus)
+	models.UpdateConfig(kefuName, "KefuAcceptingSessions", strconv.FormatBool(acceptingSessions))
+	runtimeKefu, exists := routing.GetDefaultCenter().UpdateKefuRoutingStatus(kefuName, presenceStatus, acceptingSessions)
+	if exists {
+		go ws.BroadcastKefuStatusUpdated(runtimeKefu)
+	}
+
+	c.JSON(200, gin.H{
+		"code": 200,
+		"msg":  "ok",
+		"result": gin.H{
+			"presence_status":    presenceStatus,
+			"accepting_sessions": acceptingSessions,
+		},
 	})
 }
 func GetKefuList(c *gin.Context) {

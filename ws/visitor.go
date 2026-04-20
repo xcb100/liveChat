@@ -7,6 +7,7 @@ import (
 	"goflylivechat/agent"
 	"goflylivechat/common"
 	"goflylivechat/models"
+	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"log"
 	"time"
@@ -116,10 +117,34 @@ func VisitorOnline(kefuId string, visitor models.Visitor) {
 	str, _ := json.Marshal(msg)
 	OneKefuMessage(kefuId, str)
 }
-func VisitorOffline(kefuId string, visitorId string, visitorName string) {
 
-	models.UpdateVisitorStatus(visitorId, 0)
-	releaseAgentSession(visitorId)
+// BroadcastSessionUpdated 输入会话快照，输出为广播结果，目的在于把 pending/assigned/closed 的变化同步给所有客服工作台。
+func BroadcastSessionUpdated(sessionSnapshot routing.SessionSnapshot) {
+	payload := buildSessionRealtimePayload(sessionSnapshot)
+	msg := TypeMessage{
+		Type: "sessionUpdated",
+		Data: payload,
+	}
+	str, _ := json.Marshal(msg)
+	BroadcastKefuMessage(str)
+}
+
+// NotifyPendingSessionAssigned 输入会话快照，输出为实时通知结果，目的在于在 pending 会话自动分配成功后同步新 owner 和所有工作台。
+func NotifyPendingSessionAssigned(sessionSnapshot routing.SessionSnapshot) {
+	visitor := models.FindVisitorByVistorId(sessionSnapshot.VisitorID)
+	if visitor.VisitorId == "" {
+		return
+	}
+	if sessionSnapshot.OwnerID != "" {
+		visitor.ToId = sessionSnapshot.OwnerID
+		UpdateVisitorUser(visitor.VisitorId, sessionSnapshot.OwnerID)
+		VisitorOnline(sessionSnapshot.OwnerID, visitor)
+	}
+	BroadcastSessionUpdated(sessionSnapshot)
+}
+
+// NotifyKefuVisitorOffline 输入客服标识与访客信息，输出为实时通知结果，目的在于在转接或接管时只刷新工作台列表而不关闭会话。
+func NotifyKefuVisitorOffline(kefuId string, visitorId string, visitorName string) {
 	userInfo := make(map[string]string)
 	userInfo["uid"] = visitorId
 	userInfo["name"] = visitorName
@@ -128,8 +153,18 @@ func VisitorOffline(kefuId string, visitorId string, visitorName string) {
 		Data: userInfo,
 	}
 	str, _ := json.Marshal(msg)
-	//新版
 	OneKefuMessage(kefuId, str)
+}
+
+func VisitorOffline(kefuId string, visitorId string, visitorName string) {
+
+	models.UpdateVisitorStatus(visitorId, 0)
+	routing.GetDefaultCenter().ReleaseSession(visitorId)
+	releaseAgentSession(visitorId)
+	NotifyKefuVisitorOffline(kefuId, visitorId, visitorName)
+	if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
+		BroadcastSessionUpdated(sessionSnapshot)
+	}
 }
 func VisitorNotice(visitorId string, notice string) {
 	msg := TypeMessage{
@@ -243,5 +278,47 @@ func releaseAgentSession(visitorID string) {
 	}
 	if releaseError := dispatcher.ReleaseSession(tools.Ctx, visitorID); releaseError != nil {
 		log.Printf("投递 agent 释放请求失败: %v", releaseError)
+	}
+}
+
+func buildSessionRealtimePayload(sessionSnapshot routing.SessionSnapshot) map[string]interface{} {
+	visitor := models.FindVisitorByVistorId(sessionSnapshot.VisitorID)
+	lastMessage := models.FindLastMessageByVisitorId(sessionSnapshot.VisitorID)
+	displayName := sessionSnapshot.VisitorName
+	if displayName == "" {
+		displayName = visitor.Name
+	}
+	if displayName == "" {
+		displayName = "访客"
+	}
+	avator := visitor.Avator
+	if avator == "" {
+		avator = "/static/images/2.png"
+	}
+	lastMessageContent := lastMessage.Content
+	if lastMessageContent == "" {
+		lastMessageContent = visitor.LastMessage
+	}
+	if lastMessageContent == "" {
+		lastMessageContent = "new visitor"
+	}
+	return map[string]interface{}{
+		"uid":                    sessionSnapshot.VisitorID,
+		"visitor_id":             sessionSnapshot.VisitorID,
+		"username":               displayName,
+		"name":                   displayName,
+		"avator":                 avator,
+		"owner_id":               sessionSnapshot.OwnerID,
+		"sticky_owner_id":        sessionSnapshot.StickyOwnerID,
+		"route_status":           sessionSnapshot.RouteStatus,
+		"queue_name":             sessionSnapshot.QueueName,
+		"last_route_reason":      sessionSnapshot.LastRouteReason,
+		"queue_entered_at":       sessionSnapshot.QueueEnteredAt.Unix(),
+		"last_assign_attempt":    sessionSnapshot.LastAssignAttemptAt.Unix(),
+		"last_assign_attempt_at": sessionSnapshot.LastAssignAttemptAt.Unix(),
+		"updated_at":             sessionSnapshot.LastActivityAt.Unix(),
+		"status":                 visitor.Status,
+		"last_message":           lastMessageContent,
+		"preferred_skill":        sessionSnapshot.PreferredSkill,
 	}
 }

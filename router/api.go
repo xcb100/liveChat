@@ -52,10 +52,12 @@ func InitApiRouter(engine *gin.Engine) {
 	engine.GET("/kefuinfo", middleware.JwtApiMiddleware, middleware.RbacAuth, controller.GetKefuInfo)
 	engine.GET("/kefuinfo_setting", middleware.JwtApiMiddleware, middleware.RbacAuth, controller.GetKefuInfoSetting)
 	engine.POST("/kefuinfo", middleware.JwtApiMiddleware, middleware.RbacAuth, controller.PostKefuInfo)
+	engine.POST("/kefu/status", middleware.JwtApiMiddleware, controller.PostKefuRoutingStatus)
 	engine.DELETE("/kefuinfo", middleware.JwtApiMiddleware, middleware.RbacAuth, controller.DeleteKefuInfo)
 	engine.GET("/kefulist", middleware.JwtApiMiddleware, middleware.RbacAuth, controller.GetKefuList)
 	engine.GET("/other_kefulist", middleware.JwtApiMiddleware, controller.GetOtherKefuList)
 	engine.GET("/trans_kefu", middleware.JwtApiMiddleware, controller.PostTransKefu)
+	engine.POST("/take_session", middleware.JwtApiMiddleware, controller.PostTakeSession)
 	engine.POST("/modifypass", middleware.JwtApiMiddleware, middleware.RbacAuth, controller.PostKefuPass)
 	engine.POST("/modifyavator", middleware.JwtApiMiddleware, middleware.RbacAuth, controller.PostKefuAvator)
 	//角色列表

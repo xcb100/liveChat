@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"goflylivechat/common"
 	"goflylivechat/models"
+	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"goflylivechat/ws"
 	"strconv"
@@ -68,6 +69,8 @@ func PostVisitorLogin(c *gin.Context) {
 	}
 
 	toId := c.PostForm("to_id")
+	serviceLine := c.PostForm("service_line")
+	entryID := c.PostForm("entry_id")
 	id := c.PostForm("visitor_id")
 
 	if id == "" {
@@ -98,26 +101,85 @@ func PostVisitorLogin(c *gin.Context) {
 		}
 	}
 	//log.Println(name,avator,c.ClientIP(),toId,id,refer,city,client_ip)
-	if name == "" || avator == "" || toId == "" || id == "" || refer == "" || client_ip == "" {
+	if name == "" || avator == "" || id == "" || refer == "" || client_ip == "" {
 		c.JSON(200, gin.H{
 			"code": 400,
 			"msg":  "error",
 		})
 		return
 	}
-	kefuInfo := models.FindUser(toId)
-	if kefuInfo.ID == 0 {
+	visitor := models.FindVisitorByVistorId(id)
+	routeCenter := routing.GetDefaultCenter()
+	preferredOwnerID := toId
+	requireAvailable := false
+	allowStickyOwner := false
+	if preferredOwnerID == "" && visitor.ToId != "" {
+		preferredOwnerID = visitor.ToId
+		requireAvailable = true
+		allowStickyOwner = true
+	}
+	if entryID == "" {
+		entryID = "livechat"
+	}
+	if toId != "" {
+		kefuInfo := models.FindUser(toId)
+		if kefuInfo.ID == 0 {
+			c.JSON(200, gin.H{
+				"code": 400,
+				"msg":  "The customer service account does not exist",
+			})
+			return
+		}
+	}
+	assignResult := routeCenter.AssignSession(routing.AssignmentRequest{
+		VisitorID:        id,
+		VisitorName:      name,
+		PreferredOwnerID: preferredOwnerID,
+		PreferredSkill:   serviceLine,
+		SourceEntry:      entryID,
+		RequireAvailable: requireAvailable,
+		AllowStickyOwner: allowStickyOwner,
+	})
+	if !assignResult.Assigned {
+		if visitor.Name != "" {
+			avator = visitor.Avator
+			models.UpdateVisitor(name, visitor.Avator, id, 1, c.ClientIP(), c.ClientIP(), refer, extra)
+			if visitor.ToId != "" {
+				models.UpdateVisitorKefu(id, "")
+			}
+		} else {
+			models.CreateVisitor(name, avator, c.ClientIP(), "", id, refer, city, client_ip, extra)
+		}
+		visitor.Name = name
+		visitor.Avator = avator
+		visitor.ToId = ""
+		visitor.ClientIp = c.ClientIP()
+		visitor.VisitorId = id
 		c.JSON(200, gin.H{
-			"code": 400,
-			"msg":  "The customer service account does not exist",
+			"code": 200,
+			"msg":  assignResult.Reason,
+			"result": gin.H{
+				"id":              visitor.ID,
+				"visitor_id":      id,
+				"name":            visitor.Name,
+				"avator":          visitor.Avator,
+				"to_id":           "",
+				"route_status":    assignResult.RouteStatus,
+				"queue_name":      assignResult.QueueName,
+				"preferred_skill": serviceLine,
+			},
 		})
 		return
 	}
-	visitor := models.FindVisitorByVistorId(id)
+	toId = assignResult.OwnerID
+	kefuInfo := models.FindUser(toId)
 	if visitor.Name != "" {
 		avator = visitor.Avator
 		//更新状态上线
 		models.UpdateVisitor(name, visitor.Avator, id, 1, c.ClientIP(), c.ClientIP(), refer, extra)
+		if visitor.ToId != toId {
+			models.UpdateVisitorKefu(id, toId)
+		}
 	} else {
 		models.CreateVisitor(name, avator, c.ClientIP(), toId, id, refer, city, client_ip, extra)
 	}
@@ -143,10 +205,36 @@ func PostVisitorLogin(c *gin.Context) {
 func GetVisitor(c *gin.Context) {
 	visitorId := c.Query("visitorId")
 	vistor := models.FindVisitorByVistorId(visitorId)
+	result := gin.H{
+		"id":           vistor.ID,
+		"name":         vistor.Name,
+		"avator":       vistor.Avator,
+		"source_ip":    vistor.SourceIp,
+		"to_id":        vistor.ToId,
+		"visitor_id":   vistor.VisitorId,
+		"status":       vistor.Status,
+		"refer":        vistor.Refer,
+		"city":         vistor.City,
+		"client_ip":    vistor.ClientIp,
+		"last_message": vistor.LastMessage,
+		"extra":        vistor.Extra,
+		"created_at":   vistor.CreatedAt,
+		"updated_at":   vistor.UpdatedAt,
+	}
+	if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
+		result["route_status"] = sessionSnapshot.RouteStatus
+		result["queue_name"] = sessionSnapshot.QueueName
+		result["owner_id"] = sessionSnapshot.OwnerID
+		result["sticky_owner_id"] = sessionSnapshot.StickyOwnerID
+		result["preferred_skill"] = sessionSnapshot.PreferredSkill
+		result["last_route_reason"] = sessionSnapshot.LastRouteReason
+		result["queue_entered_at"] = sessionSnapshot.QueueEnteredAt
+		result["last_assign_attempt_at"] = sessionSnapshot.LastAssignAttemptAt
+	}
 	c.JSON(200, gin.H{
 		"code":   200,
 		"msg":    "ok",
-		"result": vistor,
+		"result": result,
 	})
 }
 

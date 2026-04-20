@@ -27,7 +27,7 @@ func PostConfig(c *gin.Context) {
 	key := c.PostForm("key")
 	value := c.PostForm("value")
 	kefuName, _ := c.Get("kefu_name")
-	if key == "" || value == "" {
+	if key == "" {
 		c.JSON(200, gin.H{
 			"code": 400,
 			"msg":  "error",

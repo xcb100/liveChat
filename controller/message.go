@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"goflylivechat/common"
 	"goflylivechat/models"
+	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"goflylivechat/ws"
 	"os"
@@ -51,10 +52,20 @@ func SendMessageV2(c *gin.Context) {
 		vistorInfo = models.FindVisitorByVistorId(toId)
 	} else if cType == "visitor" {
 		vistorInfo = models.FindVisitorByVistorId(fromId)
-		kefuInfo = models.FindUser(toId)
+		kefuInfo = models.FindUser(vistorInfo.ToId)
 	}
 
 	if kefuInfo.ID == 0 || vistorInfo.ID == 0 {
+		if cType == "visitor" && vistorInfo.ID != 0 && vistorInfo.ToId == "" {
+			models.CreateMessage("", vistorInfo.VisitorId, content, cType)
+			go models.UpdateVisitorLastMessage(vistorInfo.VisitorId, content)
+			routing.GetDefaultCenter().TouchSession(vistorInfo.VisitorId)
+			c.JSON(200, gin.H{
+				"code": 200,
+				"msg":  "ok",
+			})
+			return
+		}
 		c.JSON(200, gin.H{
 			"code": 400,
 			"msg":  "用户不存在",
@@ -63,6 +74,7 @@ func SendMessageV2(c *gin.Context) {
 	}
 
 	models.CreateMessage(kefuInfo.Name, vistorInfo.VisitorId, content, cType)
+	routing.GetDefaultCenter().TouchSession(vistorInfo.VisitorId)
 	//var msg TypeMessage
 	if cType == "kefu" {
 		guest, ok := ws.ClientList[vistorInfo.VisitorId]
@@ -166,6 +178,7 @@ func SendKefuMessage(c *gin.Context) {
 	}
 
 	models.CreateMessage(kefuInfo.Name, vistorInfo.VisitorId, content, cType)
+	routing.GetDefaultCenter().TouchSession(vistorInfo.VisitorId)
 	//var msg TypeMessage
 
 	guest, ok := ws.ClientList[vistorInfo.VisitorId]
@@ -225,6 +238,12 @@ func SendCloseMessageV2(c *gin.Context) {
 		delete(ws.ClientList, visitorId)
 		go ws.VisitorOffline(oldUser.To_id, visitorId, oldUser.Name)
 		tools.Logger().Println("close_message", oldUser, err)
+	} else {
+		models.UpdateVisitorStatus(visitorId, 0)
+		routing.GetDefaultCenter().ReleaseSession(visitorId)
+		if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
+			go ws.BroadcastSessionUpdated(sessionSnapshot)
+		}
 	}
 	c.JSON(200, gin.H{
 		"code": 200,

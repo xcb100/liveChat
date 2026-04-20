@@ -14,17 +14,21 @@
 
 - 登录页：`/login`
 - 工作台：`/main`
-- 在线会话、最近访客、快捷回复、黑名单、个人资料统一处理
+- 我的会话、待分配会话、最近访客、快捷回复、黑名单、个人资料统一处理
 - 支持发送文本、图片、附件
 - 支持转接会话、结束会话
-- 支持查看 agent 状态与容量
+- 支持客服直接接管待分配会话，并保留手工转接给其他客服
+- 支持查看人工客服与 agent 状态、容量和待分配情况
+- 支持为人工客服配置技能标签，按技能池参与自动分配
 
 ### 访客侧
 
-- 访客聊天页：`/livechat?user_id=<客服账号>`
+- 访客聊天页：支持旧模式 `/livechat?user_id=<客服账号>`，也支持统一入口 `/livechat`、`/livechat?entry_id=<入口标识>`、`/livechat?service_line=<业务线>`
 - WebSocket 实时收发消息
 - 自动重连
 - 图片上传、附件上传、截图粘贴、表情
+- 暂无可接待客服时可进入待分配状态，保留会话与排队消息
+- 待分配会话支持后台自动重试分配、超时扩散和长时间无活动自动回收
 - 欢迎语、公告、历史消息分页加载
 
 ### 自动回复与 agent
@@ -138,6 +142,7 @@ http://127.0.0.1:8081/install
 - 后台登录页：`http://127.0.0.1:8081/login`
 - 后台工作台：`http://127.0.0.1:8081/main`
 - 访客聊天页：`http://127.0.0.1:8081/livechat?user_id=agent`
+- 智能分配入口：`http://127.0.0.1:8081/livechat`
 
 如果数据库未初始化，访问 `/login`、`/main`、`/livechat` 会被重定向到 `/install`。
 
@@ -243,6 +248,11 @@ go run . server -p 8081 --grpc-port 9090
 | `LIVECHAT_SHUTDOWN_TIMEOUT` | `15s` | 优雅停机超时 |
 | `LIVECHAT_RATE_LIMIT_RPS` | `8` | 请求限流速率 |
 | `LIVECHAT_RATE_LIMIT_BURST` | `16` | 请求突发桶大小 |
+| `LIVECHAT_KEFU_DEFAULT_MAX_SESSIONS` | `5` | 人工客服默认最大接待会话数 |
+| `LIVECHAT_KEFU_DEFAULT_QUEUE` | `default` | 访客未命中显式客服时的默认队列名称 |
+| `LIVECHAT_KEFU_PENDING_RETRY_INTERVAL` | `3s` | pending 会话后台自动重试分配的间隔 |
+| `LIVECHAT_KEFU_PENDING_EXPAND_AFTER` | `10s` | pending 会话等待原客服/原队列超时后扩散到公共队列的阈值 |
+| `LIVECHAT_KEFU_PENDING_TTL` | `10m` | pending 会话长时间无活动后自动回收的阈值 |
 | `LIVECHAT_AGENT_HEARTBEAT_TTL` | `75s` | agent 心跳失效时间 |
 | `LIVECHAT_AGENT_DIAL_TIMEOUT` | `2s` | agent gRPC 建连超时 |
 | `LIVECHAT_AGENT_REQUEST_TIMEOUT` | `1200ms` | agent gRPC 请求超时 |
@@ -258,6 +268,24 @@ go run . server -p 8081 --grpc-port 9090
 | `LIVECHAT_AGENT_KAFKA_CONSUME_BACKOFF` | `1s` | Kafka 消费失败后的重试退避时间 |
 | `LIVECHAT_BREAKER_TIMEOUT` | `5s` | 熔断恢复等待时间 |
 | `LIVECHAT_BREAKER_HALF_OPEN_MAX` | `3` | 熔断半开最大请求数 |
+
+## 客服技能池
+
+人工客服技能当前通过每个客服自己的 `RoutingSkills` 配置保存，格式为逗号分隔字符串，例如：
+
+```text
+sales, support, refund
+```
+
+当前路由行为：
+
+- 访客带 `service_line` 进入时，优先进入对应技能池
+- 技能池内无可接待客服时，会进入 pending 队列
+- 等待超过 `LIVECHAT_KEFU_PENDING_EXPAND_AFTER` 后，会扩散到公共池继续分配
+- 技能标签可在工作台个人资料面板直接维护
+- 工作台会展示队列、等待时长、未分配原因，并支持当前客服直接接管 pending 会话
+- pending 会话在后台自动重试分配成功后，会通过实时事件同步更新工作台列表和当前会话详情
+- 客服个人资料面板支持设置 `在线 / 暂离 / 繁忙` 以及“继续接收新会话”，路由时会据此决定是否参与分配
 | `LIVECHAT_JAEGER_ENDPOINT` | `http://localhost:14268/api/traces` | Jaeger 上报地址 |
 | `LIVECHAT_ENABLE_TRACING` | `false` | 是否启用 tracing |
 | `LIVECHAT_ENABLE_METRICS` | `true` | 是否启用指标 |

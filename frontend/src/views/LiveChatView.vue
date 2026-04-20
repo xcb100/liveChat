@@ -67,7 +67,7 @@
           </div>
           <div class="visitor-notice">
             <strong>{{ kefuInfo.nickname || '在线客服' }}</strong>
-            <div class="visitor-muted" style="margin-top: 8px;">当前会话连接到 {{ visitor.to_id || kefuId || '默认客服' }}。</div>
+            <div class="visitor-muted" style="margin-top: 8px;">当前会话连接到 {{ visitor.to_id || kefuId || serviceLine || '智能分配客服' }}。</div>
           </div>
         </section>
         <section class="visitor-card">
@@ -104,6 +104,9 @@ import { clearFlashTitle, flashTitle, formatDate, getFaceOptions, getWsBaseUrl, 
 
 const route = useRoute();
 const kefuId = computed(() => String(route.query.user_id || ""));
+const serviceLine = computed(() => String(route.query.service_line || ""));
+const entryId = computed(() => String(route.query.entry_id || ""));
+const visitorEntryKey = computed(() => kefuId.value || entryId.value || serviceLine.value || "default");
 const isIframe = window.self !== window.top;
 const messageAreaRef = ref(null);
 const imageInputRef = ref(null);
@@ -142,13 +145,13 @@ function buildNoticeMessage(noticeText) { return { key: `notice-${Date.now()}-${
 // scrollToBottom 输入为空，输出为滚动结果，目的在于保持消息区域始终聚焦最新消息。
 async function scrollToBottom() { await nextTick(); if (messageAreaRef.value) messageAreaRef.value.scrollTop = messageAreaRef.value.scrollHeight; }
 // initializeVisitor 输入为空，输出为访客初始化结果，目的在于复用 visitor_id、完成登录并拉取首屏数据。
-async function initializeVisitor() { if (!kefuId.value) throw new Error("缺少客服标识 user_id"); const cacheKey = buildVisitorCacheKey(kefuId.value); const cachedVisitor = loadVisitorCache(cacheKey); const visitorInfo = await requestJson("/visitor_login", { method: "POST", body: createFormData({ visitor_id: cachedVisitor?.visitor_id || route.query.visitor_id || "", refer: document.referrer || "Direct access", to_id: kefuId.value, extra: buildVisitorExtra() }) }); Object.assign(visitor, visitorInfo || {}); saveVisitorCache(cacheKey, visitorInfo); await loadHistoryMessages(true); await loadNotice(); openSocket(); }
+async function initializeVisitor() { const cacheKey = buildVisitorCacheKey(visitorEntryKey.value); const cachedVisitor = loadVisitorCache(cacheKey); const visitorInfo = await requestJson("/visitor_login", { method: "POST", body: createFormData({ visitor_id: cachedVisitor?.visitor_id || route.query.visitor_id || "", refer: document.referrer || "Direct access", to_id: kefuId.value, service_line: serviceLine.value, entry_id: entryId.value, extra: buildVisitorExtra() }) }); Object.assign(visitor, visitorInfo || {}); saveVisitorCache(cacheKey, visitorInfo); await loadHistoryMessages(true); await loadNotice(); openSocket(); }
 // loadHistoryMessages 输入是否重置，输出为历史消息结果，目的在于分页读取访客与客服的聊天记录。
 async function loadHistoryMessages(reset) { if (!visitor.visitor_id) return; if (reset) { historyState.page = 1; messages.value = []; } const result = await requestJson(`/2/messagesPages?visitor_id=${encodeURIComponent(visitor.visitor_id)}&page=${historyState.page}&pagesize=${historyState.pagesize}`); const historyMessages = (result.list || []).slice().reverse().map((item) => normalizeHistoryMessage(item)); messages.value = reset ? historyMessages : [...historyMessages, ...messages.value]; showLoadMore.value = messages.value.length < (result.count || 0); historyState.page += 1; if (reset) await scrollToBottom(); }
 // loadMoreMessages 输入为空，输出为更多历史加载结果，目的在于让访客继续向上翻阅更早消息。
 async function loadMoreMessages() { await loadHistoryMessages(false); }
 // loadNotice 输入为空，输出为公告和欢迎语结果，目的在于首屏展示客服公告和欢迎消息。
-async function loadNotice() { const result = await requestJson(`/notice?kefu_id=${encodeURIComponent(kefuId.value)}`); Object.assign(kefuInfo, result || {}); statusText.value = `${kefuInfo.nickname || '在线客服'} 为你服务`; if (kefuInfo.welcome) { messages.value.push({ key: `welcome-${Date.now()}`, time: formatDate(new Date().toISOString()), content: renderChatContent(kefuInfo.welcome), isAgent: true, name: kefuInfo.nickname || '客服', avator: kefuInfo.avatar || '/static/images/admin.png', show_time: true }); playAudio('chatMessageAudio', '/static/images/alert2.ogg'); await scrollToBottom(); } }
+async function loadNotice() { const noticeTarget = visitor.to_id || kefuId.value; if (!noticeTarget) { statusText.value = '正在为你分配客服'; return; } const result = await requestJson(`/notice?kefu_id=${encodeURIComponent(noticeTarget)}`); Object.assign(kefuInfo, result || {}); statusText.value = `${kefuInfo.nickname || '在线客服'} 为你服务`; if (kefuInfo.welcome) { messages.value.push({ key: `welcome-${Date.now()}`, time: formatDate(new Date().toISOString()), content: renderChatContent(kefuInfo.welcome), isAgent: true, name: kefuInfo.nickname || '客服', avator: kefuInfo.avatar || '/static/images/admin.png', show_time: true }); playAudio('chatMessageAudio', '/static/images/alert2.ogg'); await scrollToBottom(); } }
 // startHeartbeat 输入为空，输出为心跳启动结果，目的在于维持访客侧 WebSocket 活跃状态。
 function startHeartbeat() { stopHeartbeat(); heartbeatTimer = window.setInterval(() => { if (socketInstance?.readyState === WebSocket.OPEN) socketInstance.send(JSON.stringify({ type: 'ping', data: `visitor:${visitor.visitor_id}` })); }, 10000); }
 // stopHeartbeat 输入为空，输出为心跳停止结果，目的在于避免重复心跳定时器泄漏。

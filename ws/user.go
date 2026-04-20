@@ -3,6 +3,7 @@ package ws
 import (
 	"encoding/json"
 	"goflylivechat/models"
+	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"log"
 	"time"
@@ -43,6 +44,7 @@ func NewKefuServer(c *gin.Context) {
 		if err != nil {
 			log.Println("ws/user.go ", err)
 			conn.Close()
+			RemoveKefuFromList(kefu.Id)
 			return
 		}
 
@@ -67,6 +69,12 @@ func AddKefuToList(kefu *User) {
 		}
 	}
 	KefuList[kefu.Id] = kefu
+	routing.GetDefaultCenter().MarkKefuOnline(kefu.Id, kefu.Name)
+}
+
+func RemoveKefuFromList(kefuID string) {
+	delete(KefuList, kefuID)
+	routing.GetDefaultCenter().MarkKefuOffline(kefuID)
 }
 
 // 给指定客服发消息
@@ -83,6 +91,32 @@ func OneKefuMessage(toId string, str []byte) {
 		tools.Logger().Println("send_kefu_message", error, string(str))
 	}
 }
+
+// BroadcastKefuMessage 输入消息体，输出为广播结果，目的在于把会话路由变更同步给所有在线客服工作台。
+func BroadcastKefuMessage(str []byte) {
+	for kefuID := range KefuList {
+		OneKefuMessage(kefuID, str)
+	}
+}
+
+// BroadcastKefuStatusUpdated 输入客服运行时状态，输出为广播结果，目的在于把坐席在线/接待状态变化同步给所有工作台。
+func BroadcastKefuStatusUpdated(runtimeKefu routing.RuntimeKefu) {
+	msg := TypeMessage{
+		Type: "kefuStatusUpdated",
+		Data: map[string]interface{}{
+			"kefu_id":            runtimeKefu.KefuID,
+			"display_name":       runtimeKefu.DisplayName,
+			"skills":             runtimeKefu.Skills,
+			"presence_status":    runtimeKefu.PresenceStatus,
+			"accepting_sessions": runtimeKefu.AcceptingSessions,
+			"active_sessions":    runtimeKefu.ActiveSessions,
+			"max_sessions":       runtimeKefu.MaxSessions,
+		},
+	}
+	str, _ := json.Marshal(msg)
+	BroadcastKefuMessage(str)
+}
+
 func KefuMessage(visitorId, content string, kefuInfo models.User) {
 	msg := TypeMessage{
 		Type: "message",
@@ -115,7 +149,7 @@ func SendPingToKefuClient() {
 		err := kefu.Conn.WriteMessage(websocket.TextMessage, str)
 		if err != nil {
 			log.Println("定时发送ping给客服，失败", err.Error())
-			delete(KefuList, kefuId)
+			RemoveKefuFromList(kefuId)
 		}
 	}
 }

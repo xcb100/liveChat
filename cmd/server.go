@@ -20,6 +20,7 @@ import (
 	"goflylivechat/common"
 	"goflylivechat/middleware"
 	"goflylivechat/router"
+	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"goflylivechat/ws"
 )
@@ -63,6 +64,17 @@ func run() {
 	initializeCache()
 	tools.InitMetrics()
 	agent.ConfigureDefaultRegistry(appConfig.AgentHeartbeatTTL)
+	routing.ConfigureDefaultCenter(appConfig.KefuDefaultMaxSessions, appConfig.KefuDefaultQueueName, routing.AutoDispatchConfig{
+		RetryInterval: appConfig.KefuPendingRetryInterval,
+		ExpandAfter:   appConfig.KefuPendingExpandAfter,
+		PendingTTL:    appConfig.KefuPendingTTL,
+	})
+	routing.GetDefaultCenter().SetHooks(routing.Hooks{
+		OnPendingAssigned: ws.NotifyPendingSessionAssigned,
+	})
+	routingContext, cancelRouting := context.WithCancel(context.Background())
+	defer cancelRouting()
+	routing.GetDefaultCenter().StartAutoDispatch(routingContext)
 
 	grpcServer, grpcListener := mustStartGRPCServer(appConfig)
 	defer grpcServer.GracefulStop()

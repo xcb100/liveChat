@@ -22,9 +22,9 @@ export function breakOutOfIframe() {
   }
 }
 
-// buildVisitorCacheKey 输入客服账号，输出为访客缓存键，目的在于在同一客服链路下复用访客身份。
-export function buildVisitorCacheKey(kefuId) {
-  return `visitor_${kefuId}`;
+// buildVisitorCacheKey 输入会话入口标识，输出为访客缓存键，目的在于在同一入口链路下复用访客身份。
+export function buildVisitorCacheKey(entryKey) {
+  return `visitor_${entryKey || "default"}`;
 }
 
 // loadVisitorCache 输入缓存键，输出为访客缓存对象，目的在于尽量复用已分配的 visitor_id。
