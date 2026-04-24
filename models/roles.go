@@ -1,7 +1,7 @@
 package models
 
 type Role struct {
-	Id     string `json:"role_id"`
+	ID     uint   `gorm:"primary_key" json:"role_id"`
 	Name   string `json:"role_name"`
 	Method string `json:"method"`
 	Path   string `json:"path"`
@@ -17,6 +17,13 @@ func FindRole(id interface{}) Role {
 	DB.Where("id = ?", id).First(&role)
 	return role
 }
+
+func FindRoleByName(name string) Role {
+	var role Role
+	DB.Where("name = ?", name).First(&role)
+	return role
+}
+
 func SaveRole(id string, name string, method string, path string) {
 	role := &Role{
 		Method: method,

@@ -19,6 +19,7 @@ import (
 	"goflylivechat/agent"
 	"goflylivechat/common"
 	"goflylivechat/middleware"
+	"goflylivechat/outbox"
 	"goflylivechat/router"
 	"goflylivechat/routing"
 	"goflylivechat/tools"
@@ -69,12 +70,21 @@ func run() {
 		ExpandAfter:   appConfig.KefuPendingExpandAfter,
 		PendingTTL:    appConfig.KefuPendingTTL,
 	})
+	restoredSessions := routing.GetDefaultCenter().LoadSessionsFromStore()
+	if restoredSessions > 0 {
+		log.Printf("已从持久化会话表恢复 %d 条未关闭会话", restoredSessions)
+	}
 	routing.GetDefaultCenter().SetHooks(routing.Hooks{
 		OnPendingAssigned: ws.NotifyPendingSessionAssigned,
 	})
 	routingContext, cancelRouting := context.WithCancel(context.Background())
 	defer cancelRouting()
 	routing.GetDefaultCenter().StartAutoDispatch(routingContext)
+	outbox.StartWorker(routingContext, outbox.WorkerConfig{
+		PollInterval: appConfig.OutboxPollInterval,
+		BatchSize:    appConfig.OutboxBatchSize,
+		MaxAttempts:  appConfig.OutboxMaxAttempts,
+	})
 
 	grpcServer, grpcListener := mustStartGRPCServer(appConfig)
 	defer grpcServer.GracefulStop()

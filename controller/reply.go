@@ -53,6 +53,9 @@ func PostReply(c *gin.Context) {
 	}
 	models.CreateReplyGroup(replyForm.GroupName, kefuId.(string))
 	ws.InvalidateAutoReplyCache(kefuId.(string))
+	RecordAuditLog(c, "reply.group.created", "reply_group", replyForm.GroupName, nil, gin.H{
+		"group_name": replyForm.GroupName,
+	})
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "ok",
@@ -73,6 +76,10 @@ func PostReplyContent(c *gin.Context) {
 	}
 	models.CreateReplyContent(replyContentForm.GroupId, kefuId.(string), replyContentForm.Content, replyContentForm.ItemName)
 	ws.InvalidateAutoReplyCache(kefuId.(string))
+	RecordAuditLog(c, "reply.item.created", "reply_item", replyContentForm.ItemName, nil, gin.H{
+		"group_id":  replyContentForm.GroupId,
+		"item_name": replyContentForm.ItemName,
+	})
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "ok",
@@ -92,8 +99,16 @@ func PostReplyContentSave(c *gin.Context) {
 		})
 		return
 	}
+	beforeReply := models.FindReplyItemByUserIdTitle(kefuId, replyTitle)
 	models.UpdateReplyContent(replyId, kefuId.(string), replyTitle, replyContent)
 	ws.InvalidateAutoReplyCache(kefuId.(string))
+	RecordAuditLog(c, "reply.item.updated", "reply_item", replyId, gin.H{
+		"item_name": beforeReply.ItemName,
+		"content":   beforeReply.Content,
+	}, gin.H{
+		"item_name": replyTitle,
+		"content":   replyContent,
+	})
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "ok",
@@ -106,6 +121,7 @@ func DelReplyContent(c *gin.Context) {
 	id := c.Query("id")
 	models.DeleteReplyContent(id, kefuId.(string))
 	ws.InvalidateAutoReplyCache(kefuId.(string))
+	RecordAuditLog(c, "reply.item.deleted", "reply_item", id, nil, nil)
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "ok",
@@ -118,6 +134,7 @@ func DelReplyGroup(c *gin.Context) {
 	id := c.Query("id")
 	models.DeleteReplyGroup(id, kefuId.(string))
 	ws.InvalidateAutoReplyCache(kefuId.(string))
+	RecordAuditLog(c, "reply.group.deleted", "reply_group", id, nil, nil)
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "ok",

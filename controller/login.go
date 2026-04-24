@@ -34,7 +34,7 @@ func LoginCheckPass(c *gin.Context) {
 	info := models.FindUser(username)
 
 	// Authentication failed case
-	if info.Name == "" || info.Password != tools.Md5(password) {
+	if info.Name == "" || !tools.VerifyPassword(info.Password, password) {
 		c.JSON(200, gin.H{
 			"code":    401,
 			"message": "Incorrect username or password", // User-friendly message

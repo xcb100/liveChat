@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"github.com/gin-gonic/gin"
+	"goflylivechat/models"
 	"goflylivechat/tools"
 	"time"
 )
@@ -38,8 +39,17 @@ func JwtApiMiddleware(c *gin.Context) {
 			"msg":  "token失效",
 		})
 		c.Abort()
+		return
 	}
+	kefuIDFloat, _ := userinfo["kefu_id"].(float64)
+	kefuID := uint(kefuIDFloat)
+	roleName := models.FindRoleNameByUserId(kefuID)
+	if roleName == "" {
+		roleName = RoleAgent
+	}
+
 	c.Set("kefu_id", userinfo["kefu_id"])
 	c.Set("kefu_name", userinfo["kefu_name"])
+	c.Set(RoleNameContextKey, NormalizeRoleName(roleName))
 
 }

@@ -7,6 +7,7 @@ import (
 	"goflylivechat/agent"
 	"goflylivechat/common"
 	"goflylivechat/models"
+	"goflylivechat/outbox"
 	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"log"
@@ -140,6 +141,7 @@ func NotifyPendingSessionAssigned(sessionSnapshot routing.SessionSnapshot) {
 		UpdateVisitorUser(visitor.VisitorId, sessionSnapshot.OwnerID)
 		VisitorOnline(sessionSnapshot.OwnerID, visitor)
 	}
+	outbox.EnqueueSessionScopedEvent(outbox.EventSessionAssigned, "session", sessionSnapshot.VisitorID)
 	BroadcastSessionUpdated(sessionSnapshot)
 }
 
@@ -216,6 +218,8 @@ func VisitorAutoReply(vistorInfo models.Visitor, kefuInfo models.User, content s
 		VisitorMessage(vistorInfo.VisitorId, replyContent, kefuInfo)
 		KefuMessage(vistorInfo.VisitorId, replyContent, kefuInfo)
 		models.CreateMessage(kefuInfo.Name, vistorInfo.VisitorId, replyContent, "kefu")
+		models.SyncSessionSummaryByVisitorID(vistorInfo.VisitorId)
+		outbox.EnqueueSessionScopedEvent(outbox.EventMessageCreated, "session", vistorInfo.VisitorId)
 	}
 	if !ok || kefu == nil {
 		time.Sleep(1 * time.Second)
@@ -223,6 +227,8 @@ func VisitorAutoReply(vistorInfo models.Visitor, kefuInfo models.User, content s
 		if config.ConfValue != "" && replyContent == "" {
 			VisitorMessage(vistorInfo.VisitorId, config.ConfValue, kefuInfo)
 			models.CreateMessage(kefuInfo.Name, vistorInfo.VisitorId, config.ConfValue, "kefu")
+			models.SyncSessionSummaryByVisitorID(vistorInfo.VisitorId)
+			outbox.EnqueueSessionScopedEvent(outbox.EventMessageCreated, "session", vistorInfo.VisitorId)
 			return
 		}
 		assignVisitorToAgent(vistorInfo)
@@ -303,6 +309,7 @@ func buildSessionRealtimePayload(sessionSnapshot routing.SessionSnapshot) map[st
 		lastMessageContent = "new visitor"
 	}
 	return map[string]interface{}{
+		"session_id":             sessionSnapshot.SessionID,
 		"uid":                    sessionSnapshot.VisitorID,
 		"visitor_id":             sessionSnapshot.VisitorID,
 		"username":               displayName,

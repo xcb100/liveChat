@@ -41,6 +41,9 @@ type AppConfig struct {
 	AgentKafkaConsumeBackoff time.Duration
 	CircuitBreakerTimeout    time.Duration
 	CircuitBreakerMaxHalf    uint32
+	OutboxPollInterval       time.Duration
+	OutboxBatchSize          int
+	OutboxMaxAttempts        uint
 	JaegerEndpoint           string
 	EnableTracing            bool
 	EnableMetrics            bool
@@ -82,6 +85,9 @@ func GetAppConfig() AppConfig {
 		AgentKafkaConsumeBackoff: getEnvDuration("LIVECHAT_AGENT_KAFKA_CONSUME_BACKOFF", time.Second),
 		CircuitBreakerTimeout:    getEnvDuration("LIVECHAT_BREAKER_TIMEOUT", 5*time.Second),
 		CircuitBreakerMaxHalf:    uint32(getEnvInt("LIVECHAT_BREAKER_HALF_OPEN_MAX", 3)),
+		OutboxPollInterval:       getEnvDuration("LIVECHAT_OUTBOX_POLL_INTERVAL", 2*time.Second),
+		OutboxBatchSize:          getEnvInt("LIVECHAT_OUTBOX_BATCH_SIZE", 20),
+		OutboxMaxAttempts:        uint(getEnvInt("LIVECHAT_OUTBOX_MAX_ATTEMPTS", 5)),
 		JaegerEndpoint:           getEnvString("LIVECHAT_JAEGER_ENDPOINT", "http://localhost:14268/api/traces"),
 		EnableTracing:            getEnvBool("LIVECHAT_ENABLE_TRACING", Debug),
 		EnableMetrics:            getEnvBool("LIVECHAT_ENABLE_METRICS", true),

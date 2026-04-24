@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"goflylivechat/common"
+	"goflylivechat/middleware"
 	"goflylivechat/models"
+	"goflylivechat/outbox"
 	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"goflylivechat/ws"
@@ -155,6 +157,7 @@ func PostVisitorLogin(c *gin.Context) {
 		visitor.ToId = ""
 		visitor.ClientIp = c.ClientIP()
 		visitor.VisitorId = id
+		models.SyncSessionSummaryByVisitorID(id)
 		c.JSON(200, gin.H{
 			"code": 200,
 			"msg":  assignResult.Reason,
@@ -188,6 +191,8 @@ func PostVisitorLogin(c *gin.Context) {
 	visitor.ToId = toId
 	visitor.ClientIp = c.ClientIP()
 	visitor.VisitorId = id
+	models.SyncSessionSummaryByVisitorID(id)
+	outbox.EnqueueSessionScopedEvent(outbox.EventSessionAssigned, "session", id)
 
 	//各种通知
 	go SendNoticeEmail(visitor.Name, " incoming!")
@@ -205,6 +210,22 @@ func PostVisitorLogin(c *gin.Context) {
 func GetVisitor(c *gin.Context) {
 	visitorId := c.Query("visitorId")
 	vistor := models.FindVisitorByVistorId(visitorId)
+	sessionSnapshot, hasSession := routing.GetDefaultCenter().GetSession(visitorId)
+	routeStatus := ""
+	ownerID := vistor.ToId
+	if hasSession {
+		routeStatus = sessionSnapshot.RouteStatus
+		if sessionSnapshot.OwnerID != "" {
+			ownerID = sessionSnapshot.OwnerID
+		}
+	}
+	if !middleware.CanAccessSession(c, ownerID, routeStatus) {
+		c.JSON(200, gin.H{
+			"code": 403,
+			"msg":  "无权查看当前会话",
+		})
+		return
+	}
 	result := gin.H{
 		"id":           vistor.ID,
 		"name":         vistor.Name,
@@ -221,7 +242,8 @@ func GetVisitor(c *gin.Context) {
 		"created_at":   vistor.CreatedAt,
 		"updated_at":   vistor.UpdatedAt,
 	}
-	if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
+	if hasSession {
+		result["session_id"] = sessionSnapshot.SessionID
 		result["route_status"] = sessionSnapshot.RouteStatus
 		result["queue_name"] = sessionSnapshot.QueueName
 		result["owner_id"] = sessionSnapshot.OwnerID
@@ -293,7 +315,10 @@ func GetVisitorMessage(c *gin.Context) {
 		result = append(result, item)
 
 	}
-	go models.ReadMessageByVisitorId(visitorId)
+	go func() {
+		models.ReadMessageByVisitorId(visitorId)
+		models.SyncSessionSummaryByVisitorID(visitorId)
+	}()
 	c.JSON(200, gin.H{
 		"code":   200,
 		"msg":    "ok",

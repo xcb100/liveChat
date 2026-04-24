@@ -34,7 +34,13 @@ func PostConfig(c *gin.Context) {
 		})
 		return
 	}
+	beforeConfig := models.FindConfigByUserId(kefuName, key)
 	models.UpdateConfig(kefuName, key, value)
+	RecordAuditLog(c, "config.updated", "config", key, gin.H{
+		"value": beforeConfig.ConfValue,
+	}, gin.H{
+		"value": value,
+	})
 
 	c.JSON(200, gin.H{
 		"code":   200,

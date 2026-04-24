@@ -22,6 +22,12 @@ var requiredTables = []string{
 	"reply_group",
 	"reply_item",
 	"ipblack",
+	"role",
+	"user_role",
+	"audit_log",
+	"conversation_session",
+	"session_summary",
+	"outbox_event",
 }
 
 type Model struct {

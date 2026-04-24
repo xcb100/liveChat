@@ -45,6 +45,11 @@
 - `/readyz` 就绪检查
 - `/version` 版本信息
 - `/metrics` Prometheus 指标
+- 最小 RBAC 角色权限控制
+- 关键人工操作基础审计日志
+- 当前会话主状态持久化与启动恢复
+- 工作台会话摘要读模型
+- `outbox_event` 事件出箱与后台异步 worker
 - 请求超时控制
 - 访问限流
 - gRPC agent 客户端熔断
@@ -159,7 +164,7 @@ go run . install
 `import.sql` 会初始化一个默认客服账号：
 
 - 账号：`agent`
-- 密码：以你当前 `import.sql` 中的初始化数据为准；如果不确定，建议直接在登录页注册新账号使用
+- 密码：`123456`
 
 ## 配置文件
 
@@ -208,6 +213,8 @@ go run . install
 - `/install`：Web 安装
 - `/visitor_login`：访客登录
 - `/workbench/bootstrap`：工作台首屏数据
+- `/audit_logs`：审计日志分页查询
+- `/outbox_events`：事件出箱分页查询
 - `/ws_kefu`：客服 WebSocket
 - `/ws_visitor`：访客 WebSocket
 - `/uploadimg`：图片上传
@@ -268,6 +275,12 @@ go run . server -p 8081 --grpc-port 9090
 | `LIVECHAT_AGENT_KAFKA_CONSUME_BACKOFF` | `1s` | Kafka 消费失败后的重试退避时间 |
 | `LIVECHAT_BREAKER_TIMEOUT` | `5s` | 熔断恢复等待时间 |
 | `LIVECHAT_BREAKER_HALF_OPEN_MAX` | `3` | 熔断半开最大请求数 |
+| `LIVECHAT_OUTBOX_POLL_INTERVAL` | `2s` | outbox 后台 worker 轮询间隔 |
+| `LIVECHAT_OUTBOX_BATCH_SIZE` | `20` | outbox 单次批量处理事件数 |
+| `LIVECHAT_OUTBOX_MAX_ATTEMPTS` | `5` | outbox 单条事件最大重试次数 |
+| `LIVECHAT_JAEGER_ENDPOINT` | `http://localhost:14268/api/traces` | Jaeger 上报地址 |
+| `LIVECHAT_ENABLE_TRACING` | `false` | 是否启用 tracing |
+| `LIVECHAT_ENABLE_METRICS` | `true` | 是否启用指标 |
 
 ## 客服技能池
 
@@ -286,9 +299,6 @@ sales, support, refund
 - 工作台会展示队列、等待时长、未分配原因，并支持当前客服直接接管 pending 会话
 - pending 会话在后台自动重试分配成功后，会通过实时事件同步更新工作台列表和当前会话详情
 - 客服个人资料面板支持设置 `在线 / 暂离 / 繁忙` 以及“继续接收新会话”，路由时会据此决定是否参与分配
-| `LIVECHAT_JAEGER_ENDPOINT` | `http://localhost:14268/api/traces` | Jaeger 上报地址 |
-| `LIVECHAT_ENABLE_TRACING` | `false` | 是否启用 tracing |
-| `LIVECHAT_ENABLE_METRICS` | `true` | 是否启用指标 |
 
 ## Agent 调度模式
 

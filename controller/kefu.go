@@ -2,7 +2,9 @@ package controller
 
 import (
 	"github.com/gin-gonic/gin"
+	"goflylivechat/middleware"
 	"goflylivechat/models"
+	"goflylivechat/outbox"
 	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"goflylivechat/ws"
@@ -43,7 +45,7 @@ func PostKefuPass(c *gin.Context) {
 		return
 	}
 	user := models.FindUser(kefuName.(string))
-	if user.Password != tools.Md5(old_pass) {
+	if !tools.VerifyPassword(user.Password, old_pass) {
 		c.JSON(200, gin.H{
 			"code":   400,
 			"msg":    "旧密码不正确",
@@ -51,7 +53,16 @@ func PostKefuPass(c *gin.Context) {
 		})
 		return
 	}
-	models.UpdateUserPass(kefuName.(string), tools.Md5(newPass))
+	hashedPassword, hashError := tools.HashPassword(newPass)
+	if hashError != nil {
+		c.JSON(200, gin.H{
+			"code":   500,
+			"msg":    "密码处理失败",
+			"result": "",
+		})
+		return
+	}
+	models.UpdateUserPass(kefuName.(string), hashedPassword)
 	c.JSON(200, gin.H{
 		"code":   200,
 		"msg":    "ok",
@@ -139,6 +150,22 @@ func PostTransKefu(c *gin.Context) {
 		})
 		return
 	}
+	sessionSnapshot, hasSession := routing.GetDefaultCenter().GetSession(visitorId)
+	routeStatus := ""
+	ownerID := visitor.ToId
+	if hasSession {
+		routeStatus = sessionSnapshot.RouteStatus
+		if sessionSnapshot.OwnerID != "" {
+			ownerID = sessionSnapshot.OwnerID
+		}
+	}
+	if !middleware.CanAccessSession(c, ownerID, routeStatus) {
+		c.JSON(200, gin.H{
+			"code": 403,
+			"msg":  "无权转接当前会话",
+		})
+		return
+	}
 	previousOwnerID := visitor.ToId
 	assignResult := routing.GetDefaultCenter().TransferSession(visitorId, kefuId)
 	if !assignResult.Assigned {
@@ -165,6 +192,12 @@ func PostTransKefu(c *gin.Context) {
 	if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
 		go ws.BroadcastSessionUpdated(sessionSnapshot)
 	}
+	RecordAuditLog(c, "session.transferred", "session", visitorId, gin.H{
+		"previous_owner_id": previousOwnerID,
+	}, gin.H{
+		"owner_id": kefuId,
+	})
+	outbox.EnqueueSessionScopedEvent(outbox.EventSessionTransferred, "session", visitorId)
 	go ws.VisitorNotice(visitor.VisitorId, "客服转接到"+user.Nickname)
 	c.JSON(200, gin.H{
 		"code": 200,
@@ -190,6 +223,22 @@ func PostTakeSession(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"code": 400,
 			"msg":  "访客或客服不存在",
+		})
+		return
+	}
+	sessionSnapshot, hasSession := routing.GetDefaultCenter().GetSession(visitorId)
+	routeStatus := ""
+	ownerID := visitor.ToId
+	if hasSession {
+		routeStatus = sessionSnapshot.RouteStatus
+		if sessionSnapshot.OwnerID != "" {
+			ownerID = sessionSnapshot.OwnerID
+		}
+	}
+	if !middleware.CanAccessSession(c, ownerID, routeStatus) {
+		c.JSON(200, gin.H{
+			"code": 403,
+			"msg":  "无权接管当前会话",
 		})
 		return
 	}
@@ -221,6 +270,12 @@ func PostTakeSession(c *gin.Context) {
 	if sessionSnapshot, exists := routing.GetDefaultCenter().GetSession(visitorId); exists {
 		go ws.BroadcastSessionUpdated(sessionSnapshot)
 	}
+	RecordAuditLog(c, "session.taken", "session", visitorId, gin.H{
+		"previous_owner_id": previousOwnerID,
+	}, gin.H{
+		"owner_id": currentKefuName,
+	})
+	outbox.EnqueueSessionScopedEvent(outbox.EventSessionAssigned, "session", visitorId)
 	go ws.VisitorNotice(visitor.VisitorId, "客服 "+currentKefu.Nickname+" 已接管当前会话")
 
 	c.JSON(200, gin.H{
@@ -233,6 +288,14 @@ func PostTakeSession(c *gin.Context) {
 }
 func GetKefuInfoSetting(c *gin.Context) {
 	kefuId := c.Query("kefu_id")
+	currentKefuIDValue, _ := c.Get("kefu_id")
+	if !middleware.HasPermissionFromContext(c, middleware.PermissionUserManage) && kefuId != "" && kefuId != stringifyAuditValue(currentKefuIDValue) {
+		c.JSON(200, gin.H{
+			"code": 403,
+			"msg":  "无权查看其他客服资料",
+		})
+		return
+	}
 	user := models.FindUserById(kefuId)
 	c.JSON(200, gin.H{
 		"code":   200,
@@ -274,7 +337,17 @@ func PostKefuRegister(c *gin.Context) {
 		return
 	}
 
-	userID := models.CreateUser(name, tools.Md5(password), avatar, nickname)
+	hashedPassword, hashError := tools.HashPassword(password)
+	if hashError != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":   500,
+			"msg":    "Password hashing failed",
+			"result": nil,
+		})
+		return
+	}
+
+	userID := models.CreateUser(name, hashedPassword, avatar, nickname)
 	if userID == 0 {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":   500,
@@ -283,6 +356,7 @@ func PostKefuRegister(c *gin.Context) {
 		})
 		return
 	}
+	models.AssignRoleToUser(userID, "agent")
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
@@ -298,7 +372,15 @@ func PostKefuInfo(c *gin.Context) {
 	avator := c.PostForm("avator")
 	nickname := c.PostForm("nickname")
 	if password != "" {
-		password = tools.Md5(password)
+		hashedPassword, hashError := tools.HashPassword(password)
+		if hashError != nil {
+			c.JSON(200, gin.H{
+				"code": 500,
+				"msg":  "密码处理失败",
+			})
+			return
+		}
+		password = hashedPassword
 	}
 	if name == "" {
 		c.JSON(200, gin.H{
@@ -307,7 +389,15 @@ func PostKefuInfo(c *gin.Context) {
 		})
 		return
 	}
+	beforeUser := models.FindUser(name.(string))
 	models.UpdateUser(name.(string), password, avator, nickname)
+	RecordAuditLog(c, "user.profile.updated", "user", name.(string), gin.H{
+		"nickname": beforeUser.Nickname,
+		"avator":   beforeUser.Avator,
+	}, gin.H{
+		"nickname": nickname,
+		"avator":   avator,
+	})
 
 	c.JSON(200, gin.H{
 		"code":   200,
@@ -343,6 +433,10 @@ func PostKefuRoutingStatus(c *gin.Context) {
 	if exists {
 		go ws.BroadcastKefuStatusUpdated(runtimeKefu)
 	}
+	RecordAuditLog(c, "kefu.routing_status.updated", "user", kefuName, nil, gin.H{
+		"presence_status":    presenceStatus,
+		"accepting_sessions": acceptingSessions,
+	})
 
 	c.JSON(200, gin.H{
 		"code": 200,
@@ -363,8 +457,13 @@ func GetKefuList(c *gin.Context) {
 }
 func DeleteKefuInfo(c *gin.Context) {
 	kefuId := c.Query("id")
+	user := models.FindUserById(kefuId)
 	models.DeleteUserById(kefuId)
 	models.DeleteRoleByUserId(kefuId)
+	RecordAuditLog(c, "user.deleted", "user", kefuId, gin.H{
+		"name":     user.Name,
+		"nickname": user.Nickname,
+	}, nil)
 	c.JSON(200, gin.H{
 		"code":   200,
 		"msg":    "删除成功",

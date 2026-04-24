@@ -18,3 +18,5 @@ config/redis.json
 __debug_register.go
 profile*.png
 数据结构.md
+面试.md
+下一阶段开发目标.md

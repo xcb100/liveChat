@@ -18,6 +18,9 @@ func PostIpblack(c *gin.Context) {
 	}
 	kefuId, _ := c.Get("kefu_name")
 	models.CreateIpblack(ip, kefuId.(string))
+	RecordAuditLog(c, "blacklist.added", "ipblack", ip, nil, gin.H{
+		"ip": ip,
+	})
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "添加黑名单成功!",
@@ -32,7 +35,12 @@ func DelIpblack(c *gin.Context) {
 		})
 		return
 	}
+	beforeIpblack := models.FindIp(ip)
 	models.DeleteIpblackByIp(ip)
+	RecordAuditLog(c, "blacklist.removed", "ipblack", ip, gin.H{
+		"ip":      beforeIpblack.IP,
+		"kefu_id": beforeIpblack.KefuId,
+	}, nil)
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "删除黑名单成功!",

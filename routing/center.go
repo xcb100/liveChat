@@ -2,12 +2,15 @@ package routing
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"goflylivechat/models"
+	"goflylivechat/outbox"
+	"goflylivechat/tools"
 )
 
 const (
@@ -45,6 +48,7 @@ type AssignmentResult struct {
 }
 
 type SessionSnapshot struct {
+	SessionID           string    `json:"session_id"`
 	VisitorID           string    `json:"visitor_id"`
 	VisitorName         string    `json:"visitor_name"`
 	OwnerID             string    `json:"owner_id"`
@@ -60,6 +64,7 @@ type SessionSnapshot struct {
 	LastAssignedAt      time.Time `json:"last_assigned_at"`
 	LastTransferAt      time.Time `json:"last_transfer_at"`
 	LastActivityAt      time.Time `json:"last_activity_at"`
+	ClosedAt            time.Time `json:"closed_at"`
 }
 
 type SessionListFilter struct {
@@ -91,6 +96,7 @@ type Hooks struct {
 }
 
 type sessionState struct {
+	SessionID           string
 	VisitorID           string
 	VisitorName         string
 	OwnerID             string
@@ -106,6 +112,7 @@ type sessionState struct {
 	LastAssignedAt      time.Time
 	LastTransferAt      time.Time
 	LastActivityAt      time.Time
+	ClosedAt            time.Time
 }
 
 type Center struct {
@@ -161,6 +168,24 @@ func (center *Center) SetHooks(hooks Hooks) {
 	center.lock.Lock()
 	defer center.lock.Unlock()
 	center.hooks = hooks
+}
+
+func (center *Center) LoadSessionsFromStore() int {
+	center.lock.Lock()
+	defer center.lock.Unlock()
+
+	conversationSessions := models.FindOpenConversationSessions()
+	restoredCount := 0
+	for _, conversationSession := range conversationSessions {
+		session := sessionStateFromRecord(conversationSession, center.defaultQueueName)
+		if session == nil {
+			continue
+		}
+		center.sessions[session.VisitorID] = session
+		models.SyncSessionSummaryByVisitorID(session.VisitorID)
+		restoredCount++
+	}
+	return restoredCount
 }
 
 func (center *Center) MarkKefuOnline(kefuID string, displayName string) RuntimeKefu {
@@ -289,7 +314,10 @@ func (center *Center) ReleaseSession(visitorID string) bool {
 	session.RouteStatus = RouteStatusClosed
 	session.LastRouteReason = ""
 	session.LastActivityAt = time.Now()
+	session.ClosedAt = session.LastActivityAt
 	session.OwnerID = ""
+	center.syncSessionLocked(session)
+	outbox.EnqueueSessionScopedEvent(outbox.EventSessionClosed, "session", visitorID)
 	for _, runtimeKefu := range center.kefus {
 		runtimeKefu.ActiveSessions = center.activeSessionCountLocked(runtimeKefu.KefuID)
 	}
@@ -360,6 +388,7 @@ func (center *Center) TouchSession(visitorID string) {
 		return
 	}
 	session.LastActivityAt = time.Now()
+	center.syncSessionLocked(session)
 }
 
 func (center *Center) ProcessPendingSessions(now time.Time) int {
@@ -389,10 +418,14 @@ func (center *Center) StartAutoDispatch(ctx context.Context) {
 func (center *Center) ensureSessionLocked(request AssignmentRequest) *sessionState {
 	session, exists := center.sessions[request.VisitorID]
 	if exists {
-		if strings.TrimSpace(request.VisitorName) != "" {
-			session.VisitorName = request.VisitorName
+		if session.RouteStatus == RouteStatusClosed {
+			delete(center.sessions, request.VisitorID)
+		} else {
+			if strings.TrimSpace(request.VisitorName) != "" {
+				session.VisitorName = request.VisitorName
+			}
+			return session
 		}
-		return session
 	}
 
 	queueName := strings.TrimSpace(request.DefaultQueueName)
@@ -404,18 +437,24 @@ func (center *Center) ensureSessionLocked(request AssignmentRequest) *sessionSta
 		servedByType = ServedByHuman
 	}
 
+	now := time.Now()
 	session = &sessionState{
-		VisitorID:      request.VisitorID,
-		VisitorName:    request.VisitorName,
-		RouteStatus:    RouteStatusPending,
-		QueueName:      queueName,
-		PreferredSkill: request.PreferredSkill,
-		SourceEntry:    request.SourceEntry,
-		ServedByType:   servedByType,
-		QueueEnteredAt: time.Now(),
-		LastActivityAt: time.Now(),
+		SessionID:           tools.Uuid(),
+		VisitorID:           request.VisitorID,
+		VisitorName:         request.VisitorName,
+		RouteStatus:         RouteStatusPending,
+		QueueName:           queueName,
+		PreferredSkill:      request.PreferredSkill,
+		SourceEntry:         request.SourceEntry,
+		ServedByType:        servedByType,
+		QueueEnteredAt:      now,
+		LastActivityAt:      now,
+		LastAssignedAt:      time.Time{},
+		LastTransferAt:      time.Time{},
+		LastAssignAttemptAt: time.Time{},
 	}
 	center.sessions[request.VisitorID] = session
+	center.syncSessionLocked(session)
 	return session
 }
 
@@ -452,7 +491,9 @@ func (center *Center) assignLocked(session *sessionState, ownerID string, keepUn
 	session.LastAssignAttemptAt = time.Time{}
 	session.LastAssignedAt = time.Now()
 	session.LastActivityAt = time.Now()
+	session.ClosedAt = time.Time{}
 	runtimeKefu.ActiveSessions = center.activeSessionCountLocked(ownerID)
+	center.syncSessionLocked(session)
 
 	return AssignmentResult{
 		Assigned:    true,
@@ -503,6 +544,8 @@ func (center *Center) markPendingLocked(session *sessionState, stickyOwnerID str
 	} else {
 		session.QueueName = center.defaultQueueName
 	}
+	session.ClosedAt = time.Time{}
+	center.syncSessionLocked(session)
 	return AssignmentResult{
 		Assigned:    false,
 		OwnerID:     session.StickyOwnerID,
@@ -533,6 +576,8 @@ func (center *Center) processPendingSessionsLocked(now time.Time, force bool) (i
 			session.LastRouteReason = "pending 会话长时间无活动，已自动回收"
 			session.OwnerID = ""
 			session.StickyOwnerID = ""
+			session.ClosedAt = now
+			center.syncSessionLocked(session)
 			continue
 		}
 		if !force && !session.LastAssignAttemptAt.IsZero() && now.Sub(session.LastAssignAttemptAt) < center.retryInterval {
@@ -548,6 +593,7 @@ func (center *Center) processPendingSessionsLocked(now time.Time, force bool) (i
 				continue
 			}
 			session.LastRouteReason = "等待原客服恢复可接待"
+			center.syncSessionLocked(session)
 			continue
 		}
 
@@ -555,10 +601,12 @@ func (center *Center) processPendingSessionsLocked(now time.Time, force bool) (i
 			session.StickyOwnerID = ""
 			session.QueueName = center.defaultQueueName
 			session.LastRouteReason = "等待超时，已扩散到公共队列"
+			outbox.EnqueueSessionScopedEvent(outbox.EventSessionPendingExpand, "session", session.VisitorID)
 		}
 		if session.StickyOwnerID == "" && session.PreferredSkill != "" && session.QueueName != center.defaultQueueName && !session.QueueEnteredAt.IsZero() && now.Sub(session.QueueEnteredAt) >= center.expandAfter {
 			session.QueueName = center.defaultQueueName
 			session.LastRouteReason = "技能池等待超时，已扩散到公共队列"
+			outbox.EnqueueSessionScopedEvent(outbox.EventSessionPendingExpand, "session", session.VisitorID)
 		}
 
 		routingSkill := session.PreferredSkill
@@ -573,6 +621,7 @@ func (center *Center) processPendingSessionsLocked(now time.Time, force bool) (i
 			} else if session.LastRouteReason == "" {
 				session.LastRouteReason = "暂无可用客服"
 			}
+			center.syncSessionLocked(session)
 			continue
 		}
 		center.assignLocked(session, selectedKefu.KefuID, false)
@@ -660,6 +709,7 @@ func isValidPresenceStatus(presenceStatus string) bool {
 
 func cloneSession(session *sessionState) SessionSnapshot {
 	return SessionSnapshot{
+		SessionID:           session.SessionID,
 		VisitorID:           session.VisitorID,
 		VisitorName:         session.VisitorName,
 		OwnerID:             session.OwnerID,
@@ -675,6 +725,7 @@ func cloneSession(session *sessionState) SessionSnapshot {
 		LastAssignedAt:      session.LastAssignedAt,
 		LastTransferAt:      session.LastTransferAt,
 		LastActivityAt:      session.LastActivityAt,
+		ClosedAt:            session.ClosedAt,
 	}
 }
 
@@ -685,4 +736,85 @@ func (center *Center) dispatchPendingAssigned(sessionSnapshots []SessionSnapshot
 	for _, sessionSnapshot := range sessionSnapshots {
 		center.hooks.OnPendingAssigned(sessionSnapshot)
 	}
+}
+
+func (center *Center) syncSessionLocked(session *sessionState) {
+	if session == nil || !models.IsDatabaseReachable() {
+		return
+	}
+	sessionRecord := &models.ConversationSession{
+		SessionID:           session.SessionID,
+		VisitorID:           session.VisitorID,
+		VisitorName:         session.VisitorName,
+		OwnerID:             session.OwnerID,
+		StickyOwnerID:       session.StickyOwnerID,
+		RouteStatus:         session.RouteStatus,
+		QueueName:           session.QueueName,
+		PreferredSkill:      session.PreferredSkill,
+		SourceEntry:         session.SourceEntry,
+		ServedByType:        session.ServedByType,
+		LastRouteReason:     session.LastRouteReason,
+		QueueEnteredAt:      timePointer(session.QueueEnteredAt),
+		LastAssignAttemptAt: timePointer(session.LastAssignAttemptAt),
+		LastAssignedAt:      timePointer(session.LastAssignedAt),
+		LastTransferAt:      timePointer(session.LastTransferAt),
+		LastActivityAt:      timePointer(session.LastActivityAt),
+		ClosedAt:            timePointer(session.ClosedAt),
+		UpdatedAt:           time.Now(),
+	}
+	if sessionRecord.CreatedAt.IsZero() {
+		sessionRecord.CreatedAt = time.Now()
+	}
+	if savedID := models.SaveConversationSession(sessionRecord); savedID == 0 && models.IsDatabaseReachable() {
+		log.Printf("conversation session sync failed for visitor_id=%s session_id=%s", session.VisitorID, session.SessionID)
+	}
+	models.SyncSessionSummaryByVisitorID(session.VisitorID)
+}
+
+func sessionStateFromRecord(conversationSession models.ConversationSession, defaultQueueName string) *sessionState {
+	if strings.TrimSpace(conversationSession.VisitorID) == "" {
+		return nil
+	}
+	queueName := strings.TrimSpace(conversationSession.QueueName)
+	if queueName == "" {
+		queueName = defaultQueueName
+	}
+	sessionID := strings.TrimSpace(conversationSession.SessionID)
+	if sessionID == "" {
+		sessionID = tools.Uuid()
+	}
+	return &sessionState{
+		SessionID:           sessionID,
+		VisitorID:           conversationSession.VisitorID,
+		VisitorName:         conversationSession.VisitorName,
+		OwnerID:             conversationSession.OwnerID,
+		StickyOwnerID:       conversationSession.StickyOwnerID,
+		RouteStatus:         conversationSession.RouteStatus,
+		QueueName:           queueName,
+		PreferredSkill:      conversationSession.PreferredSkill,
+		SourceEntry:         conversationSession.SourceEntry,
+		ServedByType:        conversationSession.ServedByType,
+		LastRouteReason:     conversationSession.LastRouteReason,
+		QueueEnteredAt:      timeValue(conversationSession.QueueEnteredAt),
+		LastAssignAttemptAt: timeValue(conversationSession.LastAssignAttemptAt),
+		LastAssignedAt:      timeValue(conversationSession.LastAssignedAt),
+		LastTransferAt:      timeValue(conversationSession.LastTransferAt),
+		LastActivityAt:      timeValue(conversationSession.LastActivityAt),
+		ClosedAt:            timeValue(conversationSession.ClosedAt),
+	}
+}
+
+func timePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	valueCopy := value
+	return &valueCopy
+}
+
+func timeValue(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
 }

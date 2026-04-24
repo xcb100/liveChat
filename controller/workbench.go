@@ -49,6 +49,7 @@ func GetWorkbenchBootstrap(c *gin.Context) {
 				"username":           user.Name,
 				"nickname":           user.Nickname,
 				"avator":             user.Avator,
+				"role_name":          models.FindRoleNameByUserId(user.ID),
 				"routing_skills":     models.FindConfigByUserId(kefuName, "RoutingSkills").ConfValue,
 				"presence_status":    models.GetUserKefuPresenceStatus(kefuName),
 				"accepting_sessions": models.GetUserKefuAcceptingSessions(kefuName),
@@ -121,68 +122,44 @@ func buildWorkbenchOnlineVisitors(kefuName string) []gin.H {
 }
 
 func buildWorkbenchSessionSummaries(filter routing.SessionListFilter) []gin.H {
-	sessionSnapshots := routing.GetDefaultCenter().ListSessions(filter)
-	if len(sessionSnapshots) == 0 {
+	sessionSummaries := models.FindSessionSummariesByFilter(filter.OwnerID, filter.RouteStatus)
+	if len(sessionSummaries) == 0 {
 		return []gin.H{}
 	}
 
-	visitorIDs := make([]string, 0, len(sessionSnapshots))
-	for _, sessionSnapshot := range sessionSnapshots {
-		visitorIDs = append(visitorIDs, sessionSnapshot.VisitorID)
-	}
-
-	visitorMap := make(map[string]models.Visitor, len(visitorIDs))
-	for _, visitor := range models.FindVisitorsByVisitorIds(visitorIDs) {
-		visitorMap[visitor.VisitorId] = visitor
-	}
-
-	lastMessageMap := make(map[string]string, len(visitorIDs))
-	for _, message := range models.FindLastMessage(visitorIDs) {
-		lastMessageMap[message.VisitorId] = message.Content
-	}
-
-	sessionSummaries := make([]gin.H, 0, len(sessionSnapshots))
-	for _, sessionSnapshot := range sessionSnapshots {
-		visitor := visitorMap[sessionSnapshot.VisitorID]
-		displayName := sessionSnapshot.VisitorName
-		if displayName == "" {
-			displayName = visitor.Name
+	resultSummaries := make([]gin.H, 0, len(sessionSummaries))
+	for _, sessionSummary := range sessionSummaries {
+		queueEnteredAt := int64(0)
+		if sessionSummary.QueueEnteredAt != nil {
+			queueEnteredAt = sessionSummary.QueueEnteredAt.Unix()
 		}
-		if displayName == "" {
-			displayName = "访客"
+		lastAssignAttemptAt := int64(0)
+		if sessionSummary.LastAssignAttemptAt != nil {
+			lastAssignAttemptAt = sessionSummary.LastAssignAttemptAt.Unix()
 		}
-		avator := visitor.Avator
-		if avator == "" {
-			avator = "/static/images/2.png"
-		}
-		lastMessage := lastMessageMap[sessionSnapshot.VisitorID]
-		if lastMessage == "" {
-			lastMessage = visitor.LastMessage
-		}
-		if lastMessage == "" {
-			lastMessage = "new visitor"
-		}
-		sessionSummaries = append(sessionSummaries, gin.H{
-			"uid":                 sessionSnapshot.VisitorID,
-			"visitor_id":          sessionSnapshot.VisitorID,
-			"username":            displayName,
-			"name":                displayName,
-			"avator":              avator,
-			"owner_id":            sessionSnapshot.OwnerID,
-			"sticky_owner_id":     sessionSnapshot.StickyOwnerID,
-			"route_status":        sessionSnapshot.RouteStatus,
-			"queue_name":          sessionSnapshot.QueueName,
-			"last_route_reason":   sessionSnapshot.LastRouteReason,
-			"queue_entered_at":    sessionSnapshot.QueueEnteredAt.Unix(),
-			"last_assign_attempt": sessionSnapshot.LastAssignAttemptAt.Unix(),
-			"updated_at":          sessionSnapshot.LastActivityAt.Unix(),
-			"status":              visitor.Status,
-			"last_message":        lastMessage,
-			"preferred_skill":     sessionSnapshot.PreferredSkill,
+		resultSummaries = append(resultSummaries, gin.H{
+			"session_id":          sessionSummary.SessionID,
+			"uid":                 sessionSummary.VisitorID,
+			"visitor_id":          sessionSummary.VisitorID,
+			"username":            sessionSummary.DisplayName,
+			"name":                sessionSummary.DisplayName,
+			"avator":              sessionSummary.Avatar,
+			"owner_id":            sessionSummary.OwnerID,
+			"sticky_owner_id":     sessionSummary.StickyOwnerID,
+			"route_status":        sessionSummary.RouteStatus,
+			"queue_name":          sessionSummary.QueueName,
+			"last_route_reason":   sessionSummary.LastRouteReason,
+			"queue_entered_at":    queueEnteredAt,
+			"last_assign_attempt": lastAssignAttemptAt,
+			"updated_at":          sessionSummary.UpdatedAt.Unix(),
+			"status":              sessionSummary.VisitorStatus,
+			"last_message":        sessionSummary.LastMessage,
+			"preferred_skill":     sessionSummary.PreferredSkill,
+			"unread_count":        sessionSummary.UnreadCount,
 		})
 	}
 
-	return sessionSummaries
+	return resultSummaries
 }
 
 func loadKefuOverview() ([]gin.H, int, int) {

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"goflylivechat/common"
+	"goflylivechat/middleware"
 	"goflylivechat/models"
+	"goflylivechat/outbox"
 	"goflylivechat/routing"
 	"goflylivechat/tools"
 	"goflylivechat/ws"
@@ -60,6 +62,8 @@ func SendMessageV2(c *gin.Context) {
 			models.CreateMessage("", vistorInfo.VisitorId, content, cType)
 			go models.UpdateVisitorLastMessage(vistorInfo.VisitorId, content)
 			routing.GetDefaultCenter().TouchSession(vistorInfo.VisitorId)
+			models.SyncSessionSummaryByVisitorID(vistorInfo.VisitorId)
+			outbox.EnqueueSessionScopedEvent(outbox.EventMessageCreated, "session", vistorInfo.VisitorId)
 			c.JSON(200, gin.H{
 				"code": 200,
 				"msg":  "ok",
@@ -75,6 +79,8 @@ func SendMessageV2(c *gin.Context) {
 
 	models.CreateMessage(kefuInfo.Name, vistorInfo.VisitorId, content, cType)
 	routing.GetDefaultCenter().TouchSession(vistorInfo.VisitorId)
+	models.SyncSessionSummaryByVisitorID(vistorInfo.VisitorId)
+	outbox.EnqueueSessionScopedEvent(outbox.EventMessageCreated, "session", vistorInfo.VisitorId)
 	//var msg TypeMessage
 	if cType == "kefu" {
 		guest, ok := ws.ClientList[vistorInfo.VisitorId]
@@ -179,6 +185,8 @@ func SendKefuMessage(c *gin.Context) {
 
 	models.CreateMessage(kefuInfo.Name, vistorInfo.VisitorId, content, cType)
 	routing.GetDefaultCenter().TouchSession(vistorInfo.VisitorId)
+	models.SyncSessionSummaryByVisitorID(vistorInfo.VisitorId)
+	outbox.EnqueueSessionScopedEvent(outbox.EventMessageCreated, "session", vistorInfo.VisitorId)
 	//var msg TypeMessage
 
 	guest, ok := ws.ClientList[vistorInfo.VisitorId]
@@ -225,6 +233,23 @@ func SendCloseMessageV2(c *gin.Context) {
 		})
 		return
 	}
+	visitor := models.FindVisitorByVistorId(visitorId)
+	sessionSnapshot, sessionExists := routing.GetDefaultCenter().GetSession(visitorId)
+	routeStatus := ""
+	ownerID := visitor.ToId
+	if sessionExists {
+		routeStatus = sessionSnapshot.RouteStatus
+		if sessionSnapshot.OwnerID != "" {
+			ownerID = sessionSnapshot.OwnerID
+		}
+	}
+	if !middleware.CanAccessSession(c, ownerID, routeStatus) {
+		c.JSON(200, gin.H{
+			"code": 403,
+			"msg":  "无权关闭当前会话",
+		})
+		return
+	}
 
 	oldUser, ok := ws.ClientList[visitorId]
 	if oldUser != nil || ok {
@@ -245,6 +270,11 @@ func SendCloseMessageV2(c *gin.Context) {
 			go ws.BroadcastSessionUpdated(sessionSnapshot)
 		}
 	}
+	RecordAuditLog(c, "session.closed", "session", visitorId, gin.H{
+		"owner_id": ownerID,
+	}, gin.H{
+		"status": "closed",
+	})
 	c.JSON(200, gin.H{
 		"code": 200,
 		"msg":  "ok",
@@ -355,6 +385,7 @@ func GetMessagesV2(c *gin.Context) {
 		chatMessages = append(chatMessages, chatMessage)
 	}
 	models.ReadMessageByVisitorId(visitorId)
+	models.SyncSessionSummaryByVisitorID(visitorId)
 	c.JSON(200, gin.H{
 		"code":   200,
 		"msg":    "ok",
